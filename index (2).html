@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Тетрис</title>
+<style>
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: #1a1a2e;
+    color: #eee;
+    font-family: Arial, sans-serif;
+  }
+  .game { display: flex; gap: 20px; align-items: flex-start; }
+  canvas { background: #0f0f1a; border: 2px solid #444; display: block; }
+  .panel { width: 170px; }
+  .panel p { margin: 8px 0; font-size: 18px; }
+  .panel span { font-weight: bold; color: #4ee; }
+  button {
+    width: 100%; padding: 10px; font-size: 16px;
+    background: #4ee; border: none; border-radius: 6px;
+    cursor: pointer; font-weight: bold;
+  }
+  button:hover { background: #2cc; }
+  #message { min-height: 24px; color: #ff6b6b; font-weight: bold; }
+  .hint { font-size: 13px; color: #999; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div class="game">
+  <canvas id="board" width="300" height="600"></canvas>
+
+  <div class="panel">
+    <p>Очки: <span id="score">0</span></p>
+    <p>Линии: <span id="lines">0</span></p>
+    <p>Уровень: <span id="level">1</span></p>
+    <p>Комбо: <span id="combo">0</span></p>
+
+    <p>Следующая:</p>
+    <canvas id="next" width="120" height="120"
+            style="background:#0f0f1a;border:2px solid #444;border-radius:4px;"></canvas>
+
+    <button id="startBtn">Начать</button>
+    <p id="message"></p>
+
+    <p class="hint">
+      ← → — движение<br>
+      ↑ — поворот<br>
+      ↓ — ускорить<br>
+      Пробел — сбросить вниз<br>
+      P — пауза<br>
+      B — бомба (−50)<br>
+      Серия линий подряд → x2, x3 очков
+    </p>
+  </div>
+</div>
+
+<script>
+// ==================== 1. ДАННЫЕ ====================
+const COLS = 10;
+const ROWS = 20;
+const BLOCK = 30;
+const WIN_LINES = 10;
+
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const linesEl = document.getElementById('lines');
+const levelEl = document.getElementById('level');
+const messageEl = document.getElementById('message');
+const startBtn = document.getElementById('startBtn');
+
+// Превью следующей фигуры
+const nextCanvas = document.getElementById('next');
+const nextCtx = nextCanvas.getContext('2d');
+
+// Индикатор комбо (Challenge)
+const comboEl = document.getElementById('combo');
+
+const SHAPES = [
+  [[1, 1, 1, 1]],
+  [[1, 1], [1, 1]],
+  [[0, 1, 0], [1, 1, 1]],
+  [[1, 0, 0], [1, 1, 1]],
+  [[0, 0, 1], [1, 1, 1]],
+  [[0, 1, 1], [1, 1, 0]],
+  [[1, 1, 0], [0, 1, 1]]
+];
+
+const COLORS = ['#00f0f0', '#f0f000', '#a000f0', '#0000f0',
+                '#f0a000', '#00f000', '#f00000'];
+
+let field = [];
+let piece = null;
+let pieceColor = 0;
+let posX = 0;
+let posY = 0;
+let score = 0;
+let lines = 0;
+let level = 1;
+let dropDelay = 600;
+let isGameOver = true;
+let timerId = null;
+
+// Превью следующей фигуры
+let nextPiece = null;
+let nextPieceColor = 0;
+
+// Пауза
+let isPaused = false;
+
+// Challenge: комбо
+let comboCount = 0;
+
+// ==================== 2. ФУНКЦИИ ====================
+
+function createField() {
+  field = [];
+  for (let y = 0; y < ROWS; y++) {
+    field.push(new Array(COLS).fill(0));
+  }
+}
+
+function collide(x, y, shape) {
+  for (let r = 0; r < shape.length; r++) {
+    for (let c = 0; c < shape[r].length; c++) {
+      if (!shape[r][c]) continue;
+      const fx = x + c;
+      const fy = y + r;
+      if (fx < 0 || fx >= COLS || fy >= ROWS) return true;
+      if (fy >= 0 && field[fy][fx]) return true;
+    }
+  }
+  return false;
+}
+
+// Вспомогательная функция: случайная фигура
+function randomPiece() {
+  const index = Math.floor(Math.random() * SHAPES.length);
+  return { shape: SHAPES[index].map(row => row.slice()), color: index + 1 };
+}
+
+function spawnPiece() {
+  if (!nextPiece) {
+    const n = randomPiece();
+    nextPiece = n.shape;
+    nextPieceColor = n.color;
+  }
+
+  piece = nextPiece;
+  pieceColor = nextPieceColor;
+
+  const n = randomPiece();
+  nextPiece = n.shape;
+  nextPieceColor = n.color;
+  drawNext();
+
+  posX = Math.floor((COLS - piece[0].length) / 2);
+  posY = 0;
+
+  if (collide(posX, posY, piece)) {
+    endGame('Игра окончена');
+    return false;
+  }
+  return true;
+}
+
+function drawNext() {
+  nextCtx.fillStyle = '#0f0f1a';
+  nextCtx.fillRect(0, 0, nextCanvas.width, nextCanvas.height);
+  if (!nextPiece) return;
+
+  const b = 24;
+  const offX = (nextCanvas.width  - nextPiece[0].length * b) / 2;
+  const offY = (nextCanvas.height - nextPiece.length     * b) / 2;
+  nextCtx.fillStyle = COLORS[nextPieceColor - 1];
+
+  for (let r = 0; r < nextPiece.length; r++) {
+    for (let c = 0; c < nextPiece[r].length; c++) {
+      if (nextPiece[r][c]) {
+        nextCtx.fillRect(offX + c * b, offY + r * b, b - 1, b - 1);
+      }
+    }
+  }
+}
+
+function merge() {
+  for (let r = 0; r < piece.length; r++) {
+    for (let c = 0; c < piece[r].length; c++) {
+      if (piece[r][c]) {
+        field[posY + r][posX + c] = pieceColor;
+      }
+    }
+  }
+}
+
+function clearLines() {
+  let cleared = 0;
+  for (let y = ROWS - 1; y >= 0; y--) {
+    if (field[y].every(v => v !== 0)) {
+      field.splice(y, 1);
+      field.unshift(new Array(COLS).fill(0));
+      cleared++;
+      y++;
+    }
+  }
+
+  if (cleared > 0) {
+    // Challenge: комбо
+    comboCount++;
+    lines += cleared;
+
+    // множитель от 1x до 3x в зависимости от длины серии
+    const multiplier = 1 + Math.min(comboCount - 1, 4) * 0.5;
+    score += Math.round(cleared * 100 * multiplier);
+
+    // бонус за серию из 5 подряд
+    if (comboCount === 5) {
+      score += 500;
+      comboCount = 0;
+      messageEl.textContent = 'Комбо x5! Бонус +500';
+    }
+
+    level = Math.floor(lines / 5) + 1;
+    dropDelay = Math.max(100, 600 - (level - 1) * 100);
+
+    if (lines >= WIN_LINES) {
+      endGame('Победа!');
+    } else {
+      restartTimer();
+    }
+  }
+}
+
+function rotateMatrix(matrix) {
+  const rows = matrix.length;
+  const cols = matrix[0].length;
+  const result = [];
+  for (let y = 0; y < cols; y++) {
+    result.push([]);
+    for (let x = 0; x < rows; x++) {
+      result[y][x] = matrix[rows - 1 - x][y];
+    }
+  }
+  return result;
+}
+
+function move(dx) {
+  if (isGameOver || isPaused) return;
+  if (!collide(posX + dx, posY, piece)) {
+    posX += dx;
+    draw();
+  }
+}
+
+function rotate() {
+  if (isGameOver || isPaused) return;
+  const rotated = rotateMatrix(piece);
+  if (!collide(posX, posY, rotated)) {
+    piece = rotated;
+    draw();
+  }
+}
+
+function drop() {
+  if (isGameOver || isPaused) return;
+
+  if (!collide(posX, posY + 1, piece)) {
+    posY++;
+  } else {
+    merge();
+    const linesBefore = lines;      // Challenge: запоминаем, сколько линий было
+    clearLines();
+
+    // Challenge: если после приземления линий не прибавилось — серия прервана
+    if (lines === linesBefore && !isGameOver) {
+      comboCount = 0;
+    }
+
+    if (!isGameOver) spawnPiece();
+  }
+  draw();
+  updateInfo();
+}
+
+function hardDrop() {
+  if (isGameOver || isPaused) return;
+  while (!collide(posX, posY + 1, piece)) {
+    posY++;
+  }
+  drop();
+}
+
+// Бомба
+function bomb() {
+  if (isGameOver || isPaused) return;
+
+  // 1. Проверка: хватает ли очков
+  if (score < 50) {
+    messageEl.textContent = 'Недостаточно очков';
+    return;
+  }
+
+  // 2. Проверка: есть ли что убирать
+  if (field[ROWS - 1].every(v => v === 0)) {
+    messageEl.textContent = 'Нижняя строка пуста';
+    return;
+  }
+
+  // 3. Взрыв
+  field.splice(ROWS - 1, 1);
+  field.unshift(new Array(COLS).fill(0));
+
+  score = score - 50;
+  messageEl.textContent = 'Бомба! −50 очков';
+
+  updateInfo();
+  draw();
+}
+
+function drawBlock(x, y, colorIndex) {
+  ctx.fillStyle = COLORS[colorIndex - 1];
+  ctx.fillRect(x * BLOCK, y * BLOCK, BLOCK - 1, BLOCK - 1);
+}
+
+function draw() {
+  ctx.fillStyle = '#0f0f1a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.strokeStyle = '#1e1e30';
+  ctx.lineWidth = 1;
+  for (let x = 1; x < COLS; x++) {
+    ctx.beginPath();
+    ctx.moveTo(x * BLOCK, 0);
+    ctx.lineTo(x * BLOCK, canvas.height);
+    ctx.stroke();
+  }
+  for (let y = 1; y < ROWS; y++) {
+    ctx.beginPath();
+    ctx.moveTo(0, y * BLOCK);
+    ctx.lineTo(canvas.width, y * BLOCK);
+    ctx.stroke();
+  }
+
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      if (field[y][x]) drawBlock(x, y, field[y][x]);
+    }
+  }
+
+  if (piece) {
+    for (let r = 0; r < piece.length; r++) {
+      for (let c = 0; c < piece[r].length; c++) {
+        if (piece[r][c]) drawBlock(posX + c, posY + r, pieceColor);
+      }
+    }
+  }
+}
+
+function updateInfo() {
+  scoreEl.textContent = score;
+  linesEl.textContent = lines;
+  levelEl.textContent = level;
+  comboEl.textContent = comboCount;    // Challenge: показываем комбо
+}
+
+function restartTimer() {
+  clearInterval(timerId);
+  timerId = setInterval(drop, dropDelay);
+}
+
+function startGame() {
+  createField();
+  score = 0;
+  lines = 0;
+  level = 1;
+  dropDelay = 600;
+  isGameOver = false;
+  isPaused = false;
+  comboCount = 0;                 // Challenge: сброс комбо
+  nextPiece = null;               // сброс превью
+  drawNext();
+
+  messageEl.textContent = '';
+  startBtn.textContent = 'Заново';
+
+  spawnPiece();
+  updateInfo();
+  draw();
+  restartTimer();
+}
+
+function endGame(text) {
+  isGameOver = true;
+  clearInterval(timerId);
+  piece = null;
+  messageEl.textContent = text;
+  draw();
+}
+
+// Пауза
+function togglePause() {
+  if (isGameOver) return;
+  isPaused = !isPaused;
+
+  if (isPaused) {
+    clearInterval(timerId);
+    messageEl.textContent = 'Пауза (P)';
+  } else {
+    restartTimer();
+    messageEl.textContent = '';
+  }
+}
+
+// ==================== 3. СОБЫТИЯ ====================
+
+startBtn.addEventListener('click', startGame);
+
+document.addEventListener('keydown', function (event) {
+  // Пауза работает независимо
+  if (event.key === 'p' || event.key === 'P') {
+    togglePause();
+    event.preventDefault();
+    return;
+  }
+
+  if (isGameOver || isPaused) return;
+
+  if (event.key === 'ArrowLeft') {
+    move(-1);
+    event.preventDefault();
+  } else if (event.key === 'ArrowRight') {
+    move(1);
+    event.preventDefault();
+  } else if (event.key === 'ArrowDown') {
+    drop();
+    event.preventDefault();
+  } else if (event.key === 'ArrowUp') {
+    rotate();
+    event.preventDefault();
+  } else if (event.key === ' ') {
+    hardDrop();
+    event.preventDefault();
+  } else if (event.key === 'b' || event.key === 'B') {
+    bomb();
+    event.preventDefault();
+  }
+});
+
+// ==================== 4. СТАРТ ====================
+createField();
+draw();
+drawNext();
+updateInfo();
+</script>
+
+</body>
+</html>
